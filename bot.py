@@ -5,12 +5,12 @@ import os
 from datetime import datetime, timedelta, timezone
 
 # =====================
-# TOKEN (IMPORTANT FIX)
+# TOKEN (HOSTED SAFE)
 # =====================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if TOKEN is None:
-    raise ValueError("DISCORD_TOKEN is not set in environment variables!")
+    raise ValueError("DISCORD_TOKEN is not set!")
 
 # =====================
 # DISCORD SETUP
@@ -44,7 +44,7 @@ async def on_ready():
     check_reminders.start()
 
 # =====================
-# MESSAGE HANDLER
+# MESSAGE TRACKING
 # =====================
 @client.event
 async def on_message(message):
@@ -84,9 +84,9 @@ async def on_message(message):
     save_data()
 
 # =====================
-# TEST REMINDER LOOP
+# PRODUCTION REMINDER SYSTEM
 # =====================
-@tasks.loop(seconds=10)
+@tasks.loop(hours=1)
 async def check_reminders():
     now = datetime.now(timezone.utc)
 
@@ -105,19 +105,22 @@ async def check_reminders():
 
         user = await client.fetch_user(int(convo["receiver"]))
 
-        # TEST MODE (fast)
-        if time_passed < timedelta(seconds=10):
+        # wait 24 hours before first reminder
+        if time_passed < timedelta(hours=24):
             continue
 
         schedule = [
-            (10, "10s"),
-            (20, "20s"),
-            (40, "40s")
+            (3, "3-day"),
+            (7, "7-day"),
+            (14, "14-day")
         ]
 
-        for sec, label in schedule:
-            if time_passed >= timedelta(seconds=sec) and label not in convo["reminders_sent"]:
-                await channel.send(f"{user.mention} test reminder ({label})")
+        for days, label in schedule:
+            if time_passed >= timedelta(days=days) and label not in convo["reminders_sent"]:
+                await channel.send(
+                    f"{user.mention} reminder: you still haven't replied."
+                )
+
                 convo["reminders_sent"].append(label)
                 save_data()
 
