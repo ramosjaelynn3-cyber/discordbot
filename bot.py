@@ -4,8 +4,14 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
-TOKEN = "MTUwMzc0MDI2NDQ2Njg3ODU2NQ.G95mMH._sbt0Fgwco3mOlHAyIAcqEVcOTfsv0PphAmOPE"
+# =====================
+# TOKEN (HOSTING SAFE)
+# =====================
+TOKEN = os.getenv("MTUwMzc0MDI2NDQ2Njg3ODU2NQ.G95mMH._sbt0Fgwco3mOlHAyIAcqEVcOTfsv0PphAmOPE")
 
+# =====================
+# DISCORD SETUP
+# =====================
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -13,7 +19,9 @@ client = discord.Client(intents=intents)
 
 DATA_FILE = "conversations.json"
 
-Load saved conversations
+# =====================
+# LOAD DATA
+# =====================
 if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "r") as f:
         conversations = json.load(f)
@@ -22,19 +30,24 @@ else:
 
 def save_data():
     with open(DATA_FILE, "w") as f:
-        json.dump(conversations, f)
+        json.dump(conversations, f, indent=4)
 
+# =====================
+# BOT READY
+# =====================
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
     check_reminders.start()
 
+# =====================
+# MESSAGE HANDLER
+# =====================
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    # Ignore messages without mentions
     if len(message.mentions) == 0:
         return
 
@@ -43,13 +56,12 @@ async def on_message(message):
     for mentioned_user in message.mentions:
         receiver_id = str(mentioned_user.id)
 
-        # Skip self mentions
         if sender_id == receiver_id:
             continue
 
-        conversation_key = f"{sender_id}-{receiver_id}"
+        key = f"{sender_id}-{receiver_id}"
 
-        conversations[conversation_key] = {
+        conversations[key] = {
             "sender": sender_id,
             "receiver": receiver_id,
             "channel": message.channel.id,
@@ -60,16 +72,18 @@ async def on_message(message):
 
         save_data()
 
-    # Mark replies
-    for key in list(conversations.keys()):
+    # mark replies
+    for key in conversations:
         convo = conversations[key]
-
         if str(message.author.id) == convo["receiver"]:
             convo["replied"] = True
 
     save_data()
 
-@tasks.loop(hours=1)
+# =====================
+# REMINDER LOOP (TEST MODE FIRST)
+# =====================
+@tasks.loop(seconds=10)
 async def check_reminders():
     now = datetime.now(timezone.utc)
 
@@ -88,23 +102,20 @@ async def check_reminders():
 
         receiver = await client.fetch_user(int(convo["receiver"]))
 
-        # Wait 24 hours before first reminder
-        if time_passed < timedelta(hours=24):
+        # 🔥 TEST MODE: 10 seconds
+        if time_passed < timedelta(seconds=10):
             continue
 
-        reminder_schedule = [
-            (3, "3-day"),
-            (7, "7-day"),
-            (14, "14-day")
+        schedule = [
+            (10, "10s"),
+            (20, "20s"),
+            (40, "40s")
         ]
 
-        for days, label in reminder_schedule:
-            if (
-                time_passed >= timedelta(days=days)
-                and label not in convo["reminders_sent"]
-            ):
+        for sec, label in schedule:
+            if time_passed >= timedelta(seconds=sec) and label not in convo["reminders_sent"]:
                 await channel.send(
-                    f"{receiver.mention} reminder: you still have not replied."
+                    f"{receiver.mention} reminder test ({label})"
                 )
 
                 convo["reminders_sent"].append(label)
