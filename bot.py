@@ -21,7 +21,7 @@ def run_server():
     server = HTTPServer(("0.0.0.0", port), Handler)
     server.serve_forever()
 
-threading.Thread(target=run_server).start()
+threading.Thread(target=run_server, daemon=True).start()
 
 # =====================
 # TOKEN
@@ -40,7 +40,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 DATA_FILE = "conversations.json"
-CUSTOM_REMINDER_FILE = "custom_reminders.json"
+CUSTOM_FILE = "custom_reminders.json"
 
 # =====================
 # LOAD DATA
@@ -51,8 +51,8 @@ if os.path.exists(DATA_FILE):
 else:
     conversations = {}
 
-if os.path.exists(CUSTOM_REMINDER_FILE):
-    with open(CUSTOM_REMINDER_FILE, "r") as f:
+if os.path.exists(CUSTOM_FILE):
+    with open(CUSTOM_FILE, "r") as f:
         custom_reminders = json.load(f)
 else:
     custom_reminders = []
@@ -61,27 +61,29 @@ def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(conversations, f, indent=4)
 
-    with open(CUSTOM_REMINDER_FILE, "w") as f:
+    with open(CUSTOM_FILE, "w") as f:
         json.dump(custom_reminders, f, indent=4)
 
 # =====================
 # TIME PARSER
 # =====================
-def parse_time(timestr):
-    unit = timestr[-1]
-    amount = int(timestr[:-1])
+def parse_time(t):
+    try:
+        unit = t[-1]
+        value = int(t[:-1])
 
-    if unit == "m":
-        return timedelta(minutes=amount)
-    elif unit == "h":
-        return timedelta(hours=amount)
-    elif unit == "d":
-        return timedelta(days=amount)
+        if unit == "m":
+            return timedelta(minutes=value)
+        if unit == "h":
+            return timedelta(hours=value)
+        if unit == "d":
+            return timedelta(days=value)
 
-    return None
+    except:
+        return None
 
 # =====================
-# READY EVENT
+# READY
 # =====================
 @bot.event
 async def on_ready():
@@ -104,21 +106,22 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Track mentions
+    # CREATE AUTO TRACKERS
     if message.mentions:
-        sender_id = str(message.author.id)
+
+        sender = str(message.author.id)
 
         for user in message.mentions:
-            receiver_id = str(user.id)
+            receiver = str(user.id)
 
-            if sender_id == receiver_id:
+            if sender == receiver:
                 continue
 
-            key = f"{sender_id}-{receiver_id}"
+            key = f"{sender}-{receiver}"
 
             conversations[key] = {
-                "sender": sender_id,
-                "receiver": receiver_id,
+                "sender": sender,
+                "receiver": receiver,
                 "channel": message.channel.id,
                 "guild": message.guild.id,
                 "start_time": datetime.now(timezone.utc).isoformat(),
@@ -126,20 +129,17 @@ async def on_message(message):
                 "reminders_sent": []
             }
 
-    # Mark auto reminders as replied
-    for key in conversations:
-        convo = conversations[key]
+        save_data()
 
+    # MARK REPLIES
+    for convo in conversations.values():
         if str(message.author.id) == convo["receiver"]:
             convo["replied"] = True
 
-    # Cancel custom reminders if target replies
-    for reminder in custom_reminders:
-        if (
-            str(message.author.id) == reminder["target"]
-            and not reminder["sent"]
-        ):
-            reminder["cancelled"] = True
+    # CANCEL CUSTOM REMINDERS
+    for r in custom_reminders:
+        if str(message.author.id) == r["target"]:
+            r["cancelled"] = True
 
     save_data()
 
@@ -153,102 +153,96 @@ async def check_reminders():
     now = datetime.now(timezone.utc)
 
     schedule = [
-        (timedelta(minutes=5), "5-minute"),
-        (timedelta(days=1), "1-day"),
-        (timedelta(days=3), "3-day"),
-        (timedelta(days=5), "5-day"),
-        (timedelta(days=7), "7-day"),
-        (timedelta(days=10), "10-day"),
-        (timedelta(days=14), "14-day")
+        (timedelta(minutes=5), "5m"),
+        (timedelta(days=1), "1d"),
+        (timedelta(days=3), "3d"),
+        (timedelta(days=5), "5d"),
+        (timedelta(days=7), "7d"),
+        (timedelta(days=10), "10d"),
+        (timedelta(days=14), "14d")
     ]
 
-    for key in list(conversations.keys()):
-        convo = conversations[key]
+    for convo in conversations.values():
 
-        if convo["replied"]:
+        if convo.get("replied"):
             continue
 
-        start_time = datetime.fromisoformat(convo["start_time"])
-        time_passed = now - start_time
+        try:
+            start = datetime.fromisoformat(convo["start_time"])
+            passed = now - start
 
-        channel = bot.get_channel(convo["channel"])
+            channel = bot.get_channel(convo["channel"])
+            if not channel:
+                continue
 
-        if channel is None:
+            user = await bot.fetch_user(int(convo["receiver"]))
+
+            for delay, label in schedule:
+
+                if passed >= delay and label not in convo["reminders_sent"]:
+
+                    await channel.send(
+                        f"{user.mention} reminder: you still haven't replied."
+                    )
+
+                    convo["reminders_sent"].append(label)
+                    save_data()
+
+        except:
             continue
-
-        user = await bot.fetch_user(int(convo["receiver"]))
-
-        for delay, label in schedule:
-            if (
-                time_passed >= delay
-                and label not in convo["reminders_sent"]
-            ):
-                await channel.send(
-                    f"{user.mention} reminder: you still haven't replied."
-                )
-
-                convo["reminders_sent"].append(label)
-                save_data()
 
 # =====================
-# CUSTOM REMINDER LOOP
+# CUSTOM REMINDERS
 # =====================
 @tasks.loop(minutes=1)
 async def check_custom_reminders():
     now = datetime.now(timezone.utc)
 
-    for reminder in custom_reminders:
-        if reminder.get("sent"):
+    for r in custom_reminders:
+
+        if r.get("sent") or r.get("cancelled"):
             continue
 
-        if reminder.get("cancelled"):
+        try:
+            when = datetime.fromisoformat(r["remind_time"])
+
+            if now >= when:
+
+                channel = bot.get_channel(r["channel"])
+                user = await bot.fetch_user(int(r["target"]))
+
+                if channel:
+                    await channel.send(
+                        f"{user.mention} reminder: {r['message']}"
+                    )
+
+                r["sent"] = True
+                save_data()
+
+        except:
             continue
-
-        remind_time = datetime.fromisoformat(reminder["remind_time"])
-
-        if now >= remind_time:
-            channel = bot.get_channel(reminder["channel"])
-
-            if channel:
-                user = await bot.fetch_user(int(reminder["target"]))
-
-                await channel.send(
-                    f"{user.mention} reminder: {reminder['message']}"
-                )
-
-            reminder["sent"] = True
-            save_data()
 
 # =====================
 # /REMIND COMMAND
 # =====================
-@bot.tree.command(
-    name="remind",
-    description="Set a custom reminder"
-)
-async def remind(
-    interaction: discord.Interaction,
-    user: discord.User,
-    time: str,
-    message: str
-):
+@bot.tree.command(name="remind")
+async def remind(interaction: discord.Interaction, user: discord.User, time: str, message: str):
+
     delta = parse_time(time)
 
-    if delta is None:
+    if not delta:
         await interaction.response.send_message(
-            "Use formats like 10m, 2h, 3d",
+            "Use format: 10m, 2h, 3d",
             ephemeral=True
         )
         return
-
-    remind_time = datetime.now(timezone.utc) + delta
 
     custom_reminders.append({
         "target": str(user.id),
         "channel": interaction.channel.id,
         "guild": interaction.guild.id,
         "message": message,
-        "remind_time": remind_time.isoformat(),
+        "remind_time": (datetime.now(timezone.utc) + delta).isoformat(),
         "sent": False,
         "cancelled": False
     })
@@ -262,76 +256,68 @@ async def remind(
 # =====================
 # /CALENDAR COMMAND
 # =====================
-@bot.tree.command(
-    name="calendar",
-    description="View all reminders in this server"
-)
+@bot.tree.command(name="calendar")
 async def calendar(interaction: discord.Interaction):
 
-    guild_id = interaction.guild.id
-
+    guild = interaction.guild.id
     lines = []
 
-    # =====================
     # AUTO REMINDERS
-    # =====================
-    for key in conversations:
-        convo = conversations[key]
+    for convo in conversations.values():
 
-        if convo["guild"] != guild_id:
+        if convo.get("guild") != guild:
             continue
 
-        if convo["replied"]:
+        if convo.get("replied"):
             continue
 
-        sender = await bot.fetch_user(int(convo["sender"]))
-        receiver = await bot.fetch_user(int(convo["receiver"]))
+        try:
+            sender = await bot.fetch_user(int(convo["sender"]))
+            receiver = await bot.fetch_user(int(convo["receiver"]))
 
-        start_time = datetime.fromisoformat(
-            convo["start_time"]
-        ).strftime("%Y-%m-%d %H:%M UTC")
+            time = datetime.fromisoformat(
+                convo["start_time"]
+            ).strftime("%Y-%m-%d %H:%M UTC")
 
-        lines.append(
-            f"📨 AUTO: {receiver.name} has not replied to "
-            f"{sender.name} since {start_time}"
-        )
+            lines.append(
+                f"📨 AUTO: {receiver.name} waiting on {sender.name} ({time})"
+            )
 
-    # =====================
+        except:
+            continue
+
     # CUSTOM REMINDERS
-    # =====================
-    for reminder in custom_reminders:
+    for r in custom_reminders:
 
-        if reminder["guild"] != guild_id:
+        if r.get("guild") != guild:
             continue
 
-        if reminder["sent"]:
+        if r.get("sent") or r.get("cancelled"):
             continue
 
-        if reminder["cancelled"]:
+        try:
+            user = await bot.fetch_user(int(r["target"]))
+
+            time = datetime.fromisoformat(
+                r["remind_time"]
+            ).strftime("%Y-%m-%d %H:%M UTC")
+
+            lines.append(
+                f"⏰ CUSTOM: {user.name} — {r['message']} ({time})"
+            )
+
+        except:
             continue
-
-        user = await bot.fetch_user(int(reminder["target"]))
-
-        remind_time = datetime.fromisoformat(
-            reminder["remind_time"]
-        ).strftime("%Y-%m-%d %H:%M UTC")
-
-        lines.append(
-            f"⏰ CUSTOM: {user.name} — "
-            f"{reminder['message']} ({remind_time})"
-        )
 
     if not lines:
-        await interaction.response.send_message(
-            "No active reminders in this server."
-        )
+        await interaction.response.send_message("No active reminders.")
         return
 
-    final_message = "\n".join(lines)
+    msg = "\n".join(lines)
 
-    if len(final_message) > 1900:
-        final_message = final_message[:1900] + "\n..."
+    if len(msg) > 1900:
+        msg = msg[:1900] + "..."
 
-    await interaction.response.send_message(final_message)
+    await interaction.response.send_message(msg)
 
 bot.run(TOKEN)
