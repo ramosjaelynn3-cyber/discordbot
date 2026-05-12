@@ -1,6 +1,5 @@
 import discord
 from discord.ext import tasks, commands
-from discord import app_commands
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -78,8 +77,8 @@ def parse_time(timestr):
         return timedelta(hours=amount)
     elif unit == "d":
         return timedelta(days=amount)
-    else:
-        return None
+
+    return None
 
 # =====================
 # READY EVENT
@@ -90,7 +89,7 @@ async def on_ready():
 
     try:
         synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} slash commands")
+        print(f"Synced {len(synced)} commands")
     except Exception as e:
         print(e)
 
@@ -105,6 +104,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # Track mentions
     if message.mentions:
         sender_id = str(message.author.id)
 
@@ -120,21 +120,20 @@ async def on_message(message):
                 "sender": sender_id,
                 "receiver": receiver_id,
                 "channel": message.channel.id,
+                "guild": message.guild.id,
                 "start_time": datetime.now(timezone.utc).isoformat(),
                 "replied": False,
                 "reminders_sent": []
             }
 
-            save_data()
-
-    # mark replied
+    # Mark auto reminders as replied
     for key in conversations:
         convo = conversations[key]
 
         if str(message.author.id) == convo["receiver"]:
             convo["replied"] = True
 
-    # cancel custom reminders if user replied
+    # Cancel custom reminders if target replies
     for reminder in custom_reminders:
         if (
             str(message.author.id) == reminder["target"]
@@ -149,9 +148,19 @@ async def on_message(message):
 # =====================
 # AUTO REMINDERS
 # =====================
-@tasks.loop(hours=1)
+@tasks.loop(minutes=1)
 async def check_reminders():
     now = datetime.now(timezone.utc)
+
+    schedule = [
+        (timedelta(minutes=5), "5-minute"),
+        (timedelta(days=1), "1-day"),
+        (timedelta(days=3), "3-day"),
+        (timedelta(days=5), "5-day"),
+        (timedelta(days=7), "7-day"),
+        (timedelta(days=10), "10-day"),
+        (timedelta(days=14), "14-day")
+    ]
 
     for key in list(conversations.keys()):
         convo = conversations[key]
@@ -169,19 +178,9 @@ async def check_reminders():
 
         user = await bot.fetch_user(int(convo["receiver"]))
 
-        if time_passed < timedelta(hours=24):
-            continue
-
-        schedule = [
-            (1, "1-day"),
-            (3, "3-day"),
-            (7, "7-day"),
-            (14, "14-day")
-        ]
-
-        for days, label in schedule:
+        for delay, label in schedule:
             if (
-                time_passed >= timedelta(days=days)
+                time_passed >= delay
                 and label not in convo["reminders_sent"]
             ):
                 await channel.send(
@@ -223,7 +222,10 @@ async def check_custom_reminders():
 # =====================
 # /REMIND COMMAND
 # =====================
-@bot.tree.command(name="remind", description="Set a custom reminder")
+@bot.tree.command(
+    name="remind",
+    description="Set a custom reminder"
+)
 async def remind(
     interaction: discord.Interaction,
     user: discord.User,
@@ -234,7 +236,7 @@ async def remind(
 
     if delta is None:
         await interaction.response.send_message(
-            "Invalid time format. Use m/h/d (example: 10m, 2h, 3d)",
+            "Use formats like 10m, 2h, 3d",
             ephemeral=True
         )
         return
@@ -260,44 +262,72 @@ async def remind(
 # =====================
 # /CALENDAR COMMAND
 # =====================
-@bot.tree.command(name="calendar", description="View all pending reminders in this server")
+@bot.tree.command(
+    name="calendar",
+    description="View all reminders in this server"
+)
 async def calendar(interaction: discord.Interaction):
 
     guild_id = interaction.guild.id
 
-    active_reminders = []
+    lines = []
 
-    for reminder in custom_reminders:
-        if (
-            reminder.get("guild") == guild_id
-            and not reminder.get("sent")
-            and not reminder.get("cancelled")
-        ):
-            active_reminders.append(reminder)
+    # =====================
+    # AUTO REMINDERS
+    # =====================
+    for key in conversations:
+        convo = conversations[key]
 
-    if not active_reminders:
-        await interaction.response.send_message(
-            "No active reminders in this server."
+        if convo["guild"] != guild_id:
+            continue
+
+        if convo["replied"]:
+            continue
+
+        sender = await bot.fetch_user(int(convo["sender"]))
+        receiver = await bot.fetch_user(int(convo["receiver"]))
+
+        start_time = datetime.fromisoformat(
+            convo["start_time"]
+        ).strftime("%Y-%m-%d %H:%M UTC")
+
+        lines.append(
+            f"📨 AUTO: {receiver.name} has not replied to "
+            f"{sender.name} since {start_time}"
         )
-        return
 
-    message_lines = []
+    # =====================
+    # CUSTOM REMINDERS
+    # =====================
+    for reminder in custom_reminders:
 
-    for reminder in active_reminders:
+        if reminder["guild"] != guild_id:
+            continue
+
+        if reminder["sent"]:
+            continue
+
+        if reminder["cancelled"]:
+            continue
+
         user = await bot.fetch_user(int(reminder["target"]))
 
         remind_time = datetime.fromisoformat(
             reminder["remind_time"]
         ).strftime("%Y-%m-%d %H:%M UTC")
 
-        line = (
-            f"• {user.name} — {reminder['message']} "
-            f"({remind_time})"
+        lines.append(
+            f"⏰ CUSTOM: {user.name} — "
+            f"{reminder['message']} ({remind_time})"
         )
 
-        message_lines.append(line)
+    if not lines:
+        await interaction.response.send_message(
+            "No active reminders in this server."
+        )
+        return
 
-    final_message = "\n".join(message_lines)
+    final_message = "\n".join(lines)
 
     if len(final_message) > 1900:
         final_message = final_message[:1900] + "\n..."
