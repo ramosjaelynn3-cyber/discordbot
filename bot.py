@@ -192,7 +192,7 @@ async def check_reminders():
                 save_data()
 
 # =====================
-# CUSTOM REMINDERS LOOP
+# CUSTOM REMINDER LOOP
 # =====================
 @tasks.loop(minutes=1)
 async def check_custom_reminders():
@@ -221,7 +221,7 @@ async def check_custom_reminders():
             save_data()
 
 # =====================
-# SLASH COMMAND
+# /REMIND COMMAND
 # =====================
 @bot.tree.command(name="remind", description="Set a custom reminder")
 async def remind(
@@ -244,6 +244,7 @@ async def remind(
     custom_reminders.append({
         "target": str(user.id),
         "channel": interaction.channel.id,
+        "guild": interaction.guild.id,
         "message": message,
         "remind_time": remind_time.isoformat(),
         "sent": False,
@@ -255,5 +256,52 @@ async def remind(
     await interaction.response.send_message(
         f"Reminder set for {user.mention} in {time}"
     )
+
+# =====================
+# /CALENDAR COMMAND
+# =====================
+@bot.tree.command(name="calendar", description="View all pending reminders in this server")
+async def calendar(interaction: discord.Interaction):
+
+    guild_id = interaction.guild.id
+
+    active_reminders = []
+
+    for reminder in custom_reminders:
+        if (
+            reminder.get("guild") == guild_id
+            and not reminder.get("sent")
+            and not reminder.get("cancelled")
+        ):
+            active_reminders.append(reminder)
+
+    if not active_reminders:
+        await interaction.response.send_message(
+            "No active reminders in this server."
+        )
+        return
+
+    message_lines = []
+
+    for reminder in active_reminders:
+        user = await bot.fetch_user(int(reminder["target"]))
+
+        remind_time = datetime.fromisoformat(
+            reminder["remind_time"]
+        ).strftime("%Y-%m-%d %H:%M UTC")
+
+        line = (
+            f"• {user.name} — {reminder['message']} "
+            f"({remind_time})"
+        )
+
+        message_lines.append(line)
+
+    final_message = "\n".join(message_lines)
+
+    if len(final_message) > 1900:
+        final_message = final_message[:1900] + "\n..."
+
+    await interaction.response.send_message(final_message)
 
 bot.run(TOKEN)
