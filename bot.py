@@ -5,7 +5,25 @@ import os
 from datetime import datetime, timedelta, timezone
 
 # =====================
-# TOKEN (HOSTED SAFE)
+# KEEP ALIVE WEB SERVER (for UptimeRobot)
+# =====================
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive")
+
+def run_server():
+    server = HTTPServer(("0.0.0.0", 8080), Handler)
+    server.serve_forever()
+
+threading.Thread(target=run_server).start()
+
+# =====================
+# DISCORD TOKEN
 # =====================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
@@ -75,7 +93,6 @@ async def on_message(message):
 
         save_data()
 
-    # mark replies
     for key in conversations:
         convo = conversations[key]
         if str(message.author.id) == convo["receiver"]:
@@ -84,7 +101,7 @@ async def on_message(message):
     save_data()
 
 # =====================
-# PRODUCTION REMINDER SYSTEM
+# REMINDER SYSTEM
 # =====================
 @tasks.loop(hours=1)
 async def check_reminders():
@@ -105,11 +122,11 @@ async def check_reminders():
 
         user = await client.fetch_user(int(convo["receiver"]))
 
-        # wait 24 hours before first reminder
         if time_passed < timedelta(hours=24):
             continue
 
         schedule = [
+            (1, "1-day"),
             (3, "3-day"),
             (7, "7-day"),
             (14, "14-day")
@@ -117,10 +134,7 @@ async def check_reminders():
 
         for days, label in schedule:
             if time_passed >= timedelta(days=days) and label not in convo["reminders_sent"]:
-                await channel.send(
-                    f"{user.mention} reminder: you still haven't replied."
-                )
-
+                await channel.send(f"{user.mention} reminder: you still haven't replied.")
                 convo["reminders_sent"].append(label)
                 save_data()
 
