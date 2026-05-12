@@ -5,9 +5,12 @@ import os
 from datetime import datetime, timedelta, timezone
 
 # =====================
-# TOKEN (HOSTING SAFE)
+# TOKEN (IMPORTANT FIX)
 # =====================
-TOKEN = os.getenv("MTUwMzc0MDI2NDQ2Njg3ODU2NQ.G95mMH._sbt0Fgwco3mOlHAyIAcqEVcOTfsv0PphAmOPE")
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+if TOKEN is None:
+    raise ValueError("DISCORD_TOKEN is not set in environment variables!")
 
 # =====================
 # DISCORD SETUP
@@ -33,7 +36,7 @@ def save_data():
         json.dump(conversations, f, indent=4)
 
 # =====================
-# BOT READY
+# READY EVENT
 # =====================
 @client.event
 async def on_ready():
@@ -48,13 +51,13 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    if len(message.mentions) == 0:
+    if not message.mentions:
         return
 
     sender_id = str(message.author.id)
 
-    for mentioned_user in message.mentions:
-        receiver_id = str(mentioned_user.id)
+    for user in message.mentions:
+        receiver_id = str(user.id)
 
         if sender_id == receiver_id:
             continue
@@ -81,7 +84,7 @@ async def on_message(message):
     save_data()
 
 # =====================
-# REMINDER LOOP (TEST MODE FIRST)
+# TEST REMINDER LOOP
 # =====================
 @tasks.loop(seconds=10)
 async def check_reminders():
@@ -100,9 +103,9 @@ async def check_reminders():
         if channel is None:
             continue
 
-        receiver = await client.fetch_user(int(convo["receiver"]))
+        user = await client.fetch_user(int(convo["receiver"]))
 
-        # 🔥 TEST MODE: 10 seconds
+        # TEST MODE (fast)
         if time_passed < timedelta(seconds=10):
             continue
 
@@ -114,10 +117,7 @@ async def check_reminders():
 
         for sec, label in schedule:
             if time_passed >= timedelta(seconds=sec) and label not in convo["reminders_sent"]:
-                await channel.send(
-                    f"{receiver.mention} reminder test ({label})"
-                )
-
+                await channel.send(f"{user.mention} test reminder ({label})")
                 convo["reminders_sent"].append(label)
                 save_data()
 
